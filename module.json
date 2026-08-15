@@ -1,0 +1,36 @@
+{
+  "id": "Pf2eStoreGenerator",
+  "title": "PF2e Store Generator",
+  "description": "Generate complete Pathfinder 2e stores — shopkeeper, flavour, and a stocked inventory of items with prices — from a short description. The inventory is created in your Items directory and a store journal ties it together.",
+  "authors": [
+    {
+      "name": "JamesCfer"
+    }
+  ],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "14"
+  },
+  "systems": [
+    "pf2e"
+  ],
+  "esmodules": [
+    "scripts/preload-templates.js",
+    "scripts/entry.js"
+  ],
+  "styles": [
+    "styles/builder.css"
+  ],
+  "templateDir": "templates",
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    }
+  ],
+  "socket": true,
+  "version": "3.2.0",
+  "manifest": "https://github.com/JamesCfer/Pf2eStoreGenerator/releases/download/latest/module.json",
+  "download": "https://github.com/JamesCfer/Pf2eStoreGenerator/releases/download/latest/Pf2eStoreGenerator.zip"
+}
