@@ -22,6 +22,7 @@ import { sanitizeItemDataPf2e } from './sanitizer.js';
 
 const MODULE_ID = 'Pf2eStoreGenerator';
 const WIKI_ENDPOINT = `${N8N_BASE}/webhook/pf2e-wiki-item`;
+const WIKI_SEARCH_ENDPOINT = `${N8N_BASE}/webhook/pf2e-wiki-search`;
 const FLAG_KEY  = 'store';
 
 const { HandlebarsApplicationMixin, ApplicationV2 } = foundry.applications.api;
@@ -160,6 +161,7 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
       deliverOrder:  function(ev) { this._onDeliverOrder(ev); },
       cancelOrder:   function(ev) { this._onCancelOrder(ev); },
       fetchWiki:     function()   { this._onFetchWiki(); },
+      importWikiRow: function(ev) { this._onImportWikiRow(ev); },
     },
   };
 
@@ -305,6 +307,9 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
     const index = await this._loadBrowserIndex();
     const maxLevel = this.browserMaxLevel ?? Math.min(20, (Number(store.level) || 1) + 1);
     const search = this.browserSearch.trim().toLowerCase();
+    if (this.browserSource === '__wiki') {
+      return (await this._wikiSearchRows()).filter(r => (r.level || 0) <= maxLevel);
+    }
     let rows = index;
     if (this.browserSource !== 'all') rows = rows.filter(e => e.pack === this.browserSource);
     if (!this.browserAllTypes) rows = rows.filter(e => matchesStoreType(e, store.storeType || 'general'));
@@ -329,9 +334,41 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
     const index = await this._loadBrowserIndex();
     const seen = new Map();
     for (const e of index) if (!seen.has(e.pack)) seen.set(e.pack, e.packLabel);
-    return [...seen.entries()]
+    const options = [...seen.entries()]
       .map(([id, label]) => ({ id, label, selected: this.browserSource === id }))
       .sort((a, b) => a.label.localeCompare(b.label));
+    options.unshift({ id: '__wiki', label: 'Wiki: Archives of Nethys', selected: this.browserSource === '__wiki' });
+    return options;
+  }
+
+  /** Server-side wiki catalog search — the relay queries its cached tables. */
+  async _wikiSearchRows() {
+    const q = this.browserSearch.trim();
+    if (q.length < 2) return [];
+    if (this._wikiCache?.q === q) return this._wikiCache.rows;
+    const key = new Storage(MODULE_ID).getKey();
+    if (!key) { ui.notifications.warn('Sign in with Patreon (Store Generator) to browse the wiki catalog.'); return []; }
+    try {
+      const endpoint = devUrl(WIKI_SEARCH_ENDPOINT, isDevMode(MODULE_ID));
+      const { response, responseText } = await postToN8n(endpoint, { query: q }, key);
+      const data = JSON.parse(responseText);
+      if (!response.ok || data?.ok === false) throw new Error(data?.message || `Server returned ${response.status}`);
+      const rows = (data.results || []).map(r => ({
+        wiki:   true,
+        name:   r.name,
+        img:    'icons/svg/book.svg',
+        level:  Number(r.level) || 0,
+        rarity: r.rarity || '',
+        price:  r.price || '—',
+        priceCp: Number(r.priceCp) || 0,
+        packLabel: data.source || 'Wiki',
+      }));
+      this._wikiCache = { q, rows };
+      return rows;
+    } catch (err) {
+      ui.notifications.warn(`Wiki search failed: ${err.message}`);
+      return [];
+    }
   }
 
   /* ── render / listeners ─────────────────────────────────── */
@@ -745,22 +782,35 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async _onFetchWiki() {
     if (!this.isEditable) return;
-    const name = await foundry.applications.api.DialogV2.prompt({
+    const name = await this._promptWikiName();
+    if (!name || !name.trim()) return;
+    await this._fetchWikiItem(name.trim());
+  }
+
+  _onImportWikiRow(ev) {
+    if (!this.isEditable) return ui.notifications.warn('Ask your GM to import wiki items.');
+    const name = ev.target.closest('[data-item-name]')?.dataset?.itemName;
+    if (name) this._fetchWikiItem(name);
+  }
+
+  async _promptWikiName() {
+    return foundry.applications.api.DialogV2.prompt({
       window: { title: 'Fetch item from the wiki' },
       content: `<div class="form-group"><label>Item name</label><input type="text" name="value" placeholder="e.g. Sunlance" autofocus /></div>
         <p class="hint">Searches the reference wiki and converts the item for Foundry (1 use). The item is imported into this store for your world only.</p>`,
       ok: { label: 'Fetch', callback: (_ev, button) => button.form.elements.value.value },
       rejectClose: false,
     }).catch(() => null);
-    if (!name || !name.trim()) return;
+  }
 
+  async _fetchWikiItem(name) {
     const key = new Storage(MODULE_ID).getKey();
     if (!key) return ui.notifications.warn('Sign in with Patreon in the Store Generator first.');
 
-    ui.notifications.info(`Searching the wiki for "${name.trim()}"…`);
+    ui.notifications.info(`Converting "${name}" from the wiki…`);
     try {
       const endpoint = devUrl(WIKI_ENDPOINT, isDevMode(MODULE_ID));
-      const { response, responseText } = await postToN8n(endpoint, { name: name.trim() }, key);
+      const { response, responseText } = await postToN8n(endpoint, { name }, key);
       let data;
       try { data = JSON.parse(responseText); } catch { throw new Error('Invalid response from the converter.'); }
       if (!response.ok || data?.ok === false) throw new Error(data?.message || `Server returned ${response.status}`);
