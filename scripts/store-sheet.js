@@ -165,6 +165,9 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
     this.document = journal;
     this.browserOpen   = false;
     this.browserSearch = '';
+    this.browserSource = 'all';
+    this.browserAllTypes = false;
+    this.browserMaxLevel = null;
     this._browserIndex = null;
   }
 
@@ -216,7 +219,11 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     let browserRows = [];
-    if (this.browserOpen) browserRows = await this._filteredBrowserRows(store);
+    let browserSources = [];
+    if (this.browserOpen) {
+      browserRows = await this._filteredBrowserRows(store);
+      browserSources = await this._browserSourceOptions();
+    }
 
     const ownerActor = store.owner?.actorId ? game.actors.get(store.owner.actorId) : null;
 
@@ -244,7 +251,9 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
       browserOpen:    this.browserOpen,
       browserSearch:  this.browserSearch,
       browserRows,
-      browserSource:  'pf2e.equipment-srd',
+      browserSources,
+      browserAllTypes: this.browserAllTypes,
+      browserMaxLevel: this.browserMaxLevel ?? Math.min(20, (Number(store.level) || 1) + 1),
     };
   }
 
@@ -267,26 +276,35 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async _loadBrowserIndex() {
     if (this._browserIndex) return this._browserIndex;
-    const pack = game.packs.get('pf2e.equipment-srd');
-    if (!pack) return (this._browserIndex = []);
-    const index = await pack.getIndex({
-      fields: ['img', 'type', 'system.level.value', 'system.price.value',
-               'system.traits.value', 'system.group', 'system.category'],
-    });
-    this._browserIndex = Array.from(index).map(e => ({ ...e, uuid: e.uuid || `Compendium.${pack.collection}.Item.${e._id}` }));
-    return this._browserIndex;
+    const PHYSICAL = new Set(['weapon', 'armor', 'shield', 'equipment', 'consumable', 'treasure', 'backpack', 'book', 'kit']);
+    const rows = [];
+    // Every Item compendium in the world: system, modules, and world packs.
+    for (const pack of game.packs.filter(p => p.documentName === 'Item')) {
+      const index = await pack.getIndex({
+        fields: ['img', 'type', 'system.level.value', 'system.price.value',
+                 'system.traits.value', 'system.group', 'system.category'],
+      }).catch(() => null);
+      if (!index) continue;
+      for (const e of index) {
+        if (!PHYSICAL.has(e.type)) continue;
+        rows.push({ ...e, uuid: e.uuid || `Compendium.${pack.collection}.Item.${e._id}`, pack: pack.collection, packLabel: pack.metadata.label });
+      }
+    }
+    return (this._browserIndex = rows);
   }
 
   async _filteredBrowserRows(store) {
     const index = await this._loadBrowserIndex();
-    const maxLevel = Math.min(20, (Number(store.level) || 1) + 1);
+    const maxLevel = this.browserMaxLevel ?? Math.min(20, (Number(store.level) || 1) + 1);
     const search = this.browserSearch.trim().toLowerCase();
-    return index
-      .filter(e => matchesStoreType(e, store.storeType || 'general'))
+    let rows = index;
+    if (this.browserSource !== 'all') rows = rows.filter(e => e.pack === this.browserSource);
+    if (!this.browserAllTypes) rows = rows.filter(e => matchesStoreType(e, store.storeType || 'general'));
+    return rows
       .filter(e => (Number(e.system?.level?.value) || 0) <= maxLevel)
       .filter(e => !search || e.name.toLowerCase().includes(search))
       .sort((a, b) => (Number(a.system?.level?.value) || 0) - (Number(b.system?.level?.value) || 0) || a.name.localeCompare(b.name))
-      .slice(0, 120)
+      .slice(0, 200)
       .map(e => ({
         uuid:  e.uuid,
         name:  e.name,
@@ -294,7 +312,18 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
         level: Number(e.system?.level?.value) || 0,
         price: priceLabel(e.system?.price?.value),
         priceCp: coinsToCp(e.system?.price?.value),
+        packLabel: e.packLabel,
       }));
+  }
+
+  /** Distinct sources present in the index, for the catalog dropdown. */
+  async _browserSourceOptions() {
+    const index = await this._loadBrowserIndex();
+    const seen = new Map();
+    for (const e of index) if (!seen.has(e.pack)) seen.set(e.pack, e.packLabel);
+    return [...seen.entries()]
+      .map(([id, label]) => ({ id, label, selected: this.browserSource === id }))
+      .sort((a, b) => a.label.localeCompare(b.label));
   }
 
   /* ── render / listeners ─────────────────────────────────── */
@@ -331,6 +360,17 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
         this._searchTimer = setTimeout(() => this.render(false), 250);
       });
     }
+
+    const sourceEl = this.element.querySelector('[data-browser-source]');
+    if (sourceEl) sourceEl.addEventListener('change', ev => { this.browserSource = ev.currentTarget.value; this.render(false); });
+    const allTypesEl = this.element.querySelector('[data-browser-alltypes]');
+    if (allTypesEl) allTypesEl.addEventListener('change', ev => { this.browserAllTypes = ev.currentTarget.checked; this.render(false); });
+    const maxLevelEl = this.element.querySelector('[data-browser-maxlevel]');
+    if (maxLevelEl) maxLevelEl.addEventListener('change', ev => {
+      const v = Number(ev.currentTarget.value);
+      this.browserMaxLevel = Number.isFinite(v) ? Math.max(0, Math.min(30, v)) : null;
+      this.render(false);
+    });
   }
 
   /* ── inventory actions ──────────────────────────────────── */
@@ -485,7 +525,7 @@ export class StoreSheet extends HandlebarsApplicationMixin(ApplicationV2) {
   /** Same filter as the browser but without the search/display cap. */
   async _filteredBrowserRowsAll(store) {
     const index = await this._loadBrowserIndex();
-    const maxLevel = Math.min(20, (Number(store.level) || 1) + 1);
+    const maxLevel = this.browserMaxLevel ?? Math.min(20, (Number(store.level) || 1) + 1);
     return index
       .filter(e => matchesStoreType(e, store.storeType || 'general'))
       .filter(e => (Number(e.system?.level?.value) || 0) <= maxLevel)
