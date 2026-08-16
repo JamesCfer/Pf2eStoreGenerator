@@ -192,6 +192,14 @@ export class Pf2eStoreAdapter extends SystemAdapter {
           level:          formData.level,
           description:    store.description || formData.description,
           owner:          store.owner || store.shopkeeper || null,
+          staff:          (Array.isArray(store.staff) ? store.staff : []).map(s => ({
+            id:          foundry.utils.randomID(8),
+            name:        s.name || 'Employee',
+            ancestry:    s.ancestry || '',
+            role:        s.role || 'Clerk',
+            description: s.description || '',
+            actorId:     null,
+          })),
           itemFolderId:   folder?.id || null,
           inventory:      createdItems.map(item => {
             const data = item.toObject ? item.toObject() : item;
