@@ -35,7 +35,7 @@
       }
     ]
   },
-  "version": "3.3.5",
+  "version": "3.3.8",
   "manifest": "https://github.com/JamesCfer/Pf2eStoreGenerator/releases/download/latest/module.json",
   "download": "https://github.com/JamesCfer/Pf2eStoreGenerator/releases/download/latest/Pf2eStoreGenerator.zip"
 }
